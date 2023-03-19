@@ -1,0 +1,143 @@
+---
+title: "Genomic_data_prep_for_MM"
+output: html_document
+date: "2023-03-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#### pipeline from https://doi.org/10.1101/2022.11.25.517762
+
+### Load packages
+
+```{r include=FALSE}
+library(SummarizedExperiment)
+library(TCGAbiolinks)
+require(EDASeq)
+require(dplyr)
+require(NOISeq)
+library(DESeq2)
+library(biomaRt)
+
+```
+
+### Download annotation file from BioMart.
+
+```{r include=FALSE}
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl", mirror = "www")
+
+features <- c("ensembl_gene_id", "chromosome_name", 
+              "start_position", "end_position", "hgnc_symbol",	
+              "percentage_gene_gc_content", "gene_biotype")
+chrs <- c(1:22, "X", "Y")
+
+annot <- getBM(attributes = features,
+               filters = "chromosome_name",
+               values = chrs, 
+               mart = ensembl)
+
+colnames(annot)<-c("ensembl_gene_id", "Chr", "Start", "End", "HGNC_symbol", "GC", "Type")
+annot$Length <- abs(annot$End - annot$Start)
+```
+
+### Download
+
+```{r}
+query.mm = GDCquery(project = "MMRF-COMMPASS",
+                    data.category = "Transcriptome Profiling",
+                    data.type = "Gene Expression Quantification",
+                    workflow.type = "STAR - Counts")
+
+GDCdownload(query = query.mm) #download data
+```
+
+### Download data
+
+```{r}
+
+dataPrep1.mm = GDCprepare(query = query.mm)
+
+
+MM_fem <- dataPrep1.mm[ , dataPrep1.mm$gender == "female"]
+MM_male <- dataPrep1.mm[ , dataPrep1.mm$gender == "male"]
+
+rnas <- cbind(assay(MM_fem), assay(MM_male))
+```
+
+
+
+```{r}
+factorsMM_fem <- data.frame(Group = "female", Sample = colnames(MM_fem))
+factorsMM_male <- data.frame(Group = "male", Sample = colnames(MM_male))
+factors <- rbind(factorsMM_fem, factorsMM_male)
+rownames(factors) <- factors$Sample
+Ready_factors <- as.data.frame(factors$Group)
+```
+
+
+
+```{r}
+dataFilt <- TCGAanalyze_Filtering(tabDF = rnas,
+                                  method = "quantile",
+                                  qnt.cut = 0.25)
+
+threshold <- round(dim(rnas)[2]/2)
+ridx <- rowSums(dataFilt == 0) <= threshold
+dataFilt <- dataFilt[ridx, ]
+dim(dataFilt)
+
+ridx <- rowMeans(dataFilt) >= 10
+dataFilt <- dataFilt[ridx, ]
+print(dim(dataFilt))
+rnas <- rnas[rownames(rnas) %in% rownames(dataFilt), ]
+dim(rnas)
+```
+
+### Remove dots form ensemble ids 
+
+```{r}
+tx <- rownames(rnas)
+tx <- gsub("\\.\\d+$", "", tx)
+rownames(rnas) = tx
+```
+
+### Filter the annotation file to get only the genes in the expression matrix. Check for duplicates and remove them if necessary.
+
+```{r}
+inter <- intersect(rownames(rnas), annot$ensembl_gene_id)
+length(inter)
+rnas1 <- rnas[rownames(rnas) %in% inter,] #This is the raw expression matrix used in Step 2 as input for DESeq2
+dim(rnas1)
+annot1 <- annot[annot$ensembl_gene_id  %in% inter,]
+dim(annot1)
+annot1 <- annot1[!duplicated(annot1$ensembl_gene_id),]
+dim(annot1)
+annot1[annot1 == ""] <- NA 
+```
+
+### Normalization steps.
+```{r}
+gcn.data <- withinLaneNormalization(ln.data , annot1$GC, which = "full")
+Btwn.Norm <- betweenLaneNormalization(gcn.data, which = "full") 
+
+```
+
+### Calculate tpm (davidrequena)
+```{r}
+tpm <- function(raw_counts, gene_lengths) {
+
+  x <- raw_counts*1e3 / gene_lengths
+  return(t(t(x)*1e6 / colSums(x)))
+
+}
+
+tpm_arns = tpm(rnas1, annot1$Length)
+
+```
+
+
+
+
+
