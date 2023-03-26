@@ -16,12 +16,13 @@ knitr::opts_chunk$set(echo = TRUE)
 library(SummarizedExperiment)
 library(TCGAbiolinks)
 require(EDASeq)
-require(dplyr)
+require(tidyverse)
 require(NOISeq)
 library(DESeq2)
 library(biomaRt)
 
 ```
+
 
 ### Download annotation file from BioMart.
 
@@ -39,10 +40,11 @@ annot <- getBM(attributes = features,
                mart = ensembl)
 
 colnames(annot)<-c("ensembl_gene_id", "Chr", "Start", "End", "HGNC_symbol", "GC", "Type")
+
 annot$Length <- abs(annot$End - annot$Start)
 ```
 
-### Download
+### Download MMRF-COMMPASS dataset
 
 ```{r}
 query.mm = GDCquery(project = "MMRF-COMMPASS",
@@ -53,7 +55,7 @@ query.mm = GDCquery(project = "MMRF-COMMPASS",
 GDCdownload(query = query.mm) #download data
 ```
 
-### Download data
+
 
 ```{r}
 
@@ -117,14 +119,16 @@ dim(annot1)
 annot1[annot1 == ""] <- NA 
 ```
 
-### Normalization steps.
+### Normalization steps for TPM
 ```{r}
 gcn.data <- withinLaneNormalization(ln.data , annot1$GC, which = "full")
 Btwn.Norm <- betweenLaneNormalization(gcn.data, which = "full") 
 
 ```
 
-### Calculate tpm (davidrequena)
+#### Calculate tpm (https://github.com/davidrequena/drfun/blob/main/R/tpm.R)
+For deconvolution
+
 ```{r}
 tpm <- function(raw_counts, gene_lengths) {
 
@@ -133,18 +137,33 @@ tpm <- function(raw_counts, gene_lengths) {
 
 }
 
+
 tpm_arns = tpm(rnas1, annot1$Length)
 
 ```
 
+#### Remove the noise
+
+```{r}
+noiseqData <- NOISeq::readData(tpm_arns, factors = ready_factors)
+mydata2corr = NOISeq::ARSyNseq(noiseqData, norm = "n",  logtransf = FALSE)
+tpm_arns1 <- exprs(mydata2corr)
+```
+
+
+
 ### TMM
+
+for Gene Set Enrichment analysis
+
 ```{r}
 ln.data <- withinLaneNormalization(rnas1, annot1$Length, which = "full")
 gcn.data <- withinLaneNormalization(ln.data , annot1$GC, which = "full")
 Btwn.Norm <- betweenLaneNormalization(gcn.data, which = "full") 
 norm.counts <- tmm(Btwn.Norm, long = 1000, lc = 0, k = 0)
-noiseqData <- NOISeq::readData(norm.counts, factors = Ready_factors)
-mydata2corr1 = NOISeq::ARSyNseq(noiseqData, norm = "n",  logtransf = FALSE)
-rnas2 <- exprs(mydata2corr1)
+noiseqData2 <- NOISeq::readData(norm.counts, factors = Ready_factors)
+mydata2corr2 = NOISeq::ARSyNseq(noiseqData, norm = "n",  logtransf = FALSE)
+tmm_arns1 <- exprs(mydata2corr2)
+```
 
 
